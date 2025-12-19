@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  insights-api:
+    build: ./api
+    container_name: lumicello-insights-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:26Nse4RDplFJfqkwHyUUPPrp@persistence:5432/lumicello_insights
+    volumes:
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - default
+
+  insights-web:
+    build: ./web
+    container_name: lumicello-insights-web
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - insights-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge
