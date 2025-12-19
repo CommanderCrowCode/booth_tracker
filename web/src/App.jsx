@@ -66,24 +66,29 @@ function App() {
     }
   }, [])
 
-  // Handle walk-by (single tap)
-  const handleWalkBy = async () => {
-    try {
-      await api('/interactions', {
-        method: 'POST',
-        body: JSON.stringify({ interaction_type: 'walk_by' })
-      })
-      showConfirmation({ type: 'walk_by' })
-      loadStats()
-    } catch (err) {
-      alert('Failed to log walk-by: ' + err.message)
-    }
-  }
-
   // Start conversation flow
   const startConversation = () => {
     setFlowData({})
     setScreen('flow-persona')
+  }
+
+  // Quick walk-by log
+  const logWalkBy = async () => {
+    try {
+      await api('/interactions', {
+        method: 'POST',
+        body: JSON.stringify({
+          interaction_type: 'walk_by'
+        })
+      })
+      setConfirmation({ type: 'walk_by' })
+      loadStats()
+      setTimeout(() => {
+        setConfirmation(null)
+      }, 1200)
+    } catch (err) {
+      alert('Failed to save: ' + err.message)
+    }
   }
 
   // Handle flow navigation
@@ -165,8 +170,8 @@ function App() {
         <HomeScreen
           staff={staff}
           stats={stats}
-          onWalkBy={handleWalkBy}
           onConversation={startConversation}
+          onWalkBy={logWalkBy}
           onViewStats={() => setScreen('stats')}
         />
       )}
@@ -241,7 +246,15 @@ function LoadingScreen() {
   return (
     <div className="screen loading-screen">
       <div className="loading-content">
-        <div className="loading-logo">L</div>
+        <div className="loading-logo">
+          <svg viewBox="0 0 100 100" className="bulb-icon">
+            <ellipse cx="50" cy="40" rx="28" ry="32" fill="#FFF9E6" stroke="#F5DEB3" strokeWidth="2"/>
+            <circle cx="50" cy="35" r="10" fill="#FFD700"/>
+            <rect x="40" y="68" width="20" height="4" rx="1" fill="#A0A0A0"/>
+            <rect x="42" y="72" width="16" height="3" rx="1" fill="#909090"/>
+            <rect x="44" y="75" width="12" height="3" rx="1" fill="#808080"/>
+          </svg>
+        </div>
         <p>Connecting...</p>
       </div>
     </div>
@@ -265,64 +278,86 @@ function ErrorScreen({ message }) {
   )
 }
 
-// Home Screen
-function HomeScreen({ staff, stats, onWalkBy, onConversation, onViewStats }) {
+// Home Screen - Dual action with walk-by
+function HomeScreen({ staff, stats, onConversation, onWalkBy, onViewStats }) {
   return (
     <div className="screen home-screen">
+      {/* Header with brand */}
       <header className="home-header">
-        <h1 className="brand">LUMICELLO</h1>
-        <p className="location">K VILLAGE</p>
-        <p className="greeting">สวัสดีค่ะ {staff?.name}</p>
+        <div className="brand-mark">
+          <svg viewBox="0 0 40 40" className="brand-icon">
+            <ellipse cx="20" cy="16" rx="11" ry="13" fill="#FFF9E6" stroke="#F5DEB3" strokeWidth="1"/>
+            <circle cx="20" cy="14" r="4" fill="#FFD700"/>
+            <rect x="16" y="27" width="8" height="2" rx="1" fill="#A0A0A0"/>
+            <rect x="17" y="29" width="6" height="1.5" rx="0.5" fill="#808080"/>
+          </svg>
+          <span className="brand-name">Lumicello</span>
+        </div>
+        <button className="btn-stats-icon" onClick={onViewStats}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 20V10M12 20V4M6 20v-6"/>
+          </svg>
+        </button>
       </header>
 
-      <div className="stats-summary">
-        <div className="stats-row">
-          <div className="stat-card">
-            <span className="stat-label">TODAY</span>
-            <div className="stat-value">
-              <span className="stat-icon">👥</span>
-              <span>{stats?.today?.visitors || 0}</span>
-            </div>
-            <div className="stat-detail">
-              <span>🛒 {stats?.today?.sales?.count || 0}</span>
-              <span className="stat-revenue">{formatBaht(stats?.today?.sales?.revenue)}</span>
-            </div>
-            <div className="stat-detail">
-              <span>💚 {stats?.today?.leads?.line || 0} LINE</span>
-            </div>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">THIS WEEK</span>
-            <div className="stat-value">
-              <span className="stat-icon">👥</span>
-              <span>{stats?.week?.visitors || 0}</span>
-            </div>
-            <div className="stat-detail">
-              <span>🛒 {stats?.week?.sales?.count || 0}</span>
-              <span className="stat-revenue">{formatBaht(stats?.week?.sales?.revenue)}</span>
-            </div>
-            <div className="stat-detail">
-              <span>💚 {stats?.week?.leads?.line || 0} LINE</span>
-            </div>
-          </div>
+      {/* Stats ribbon */}
+      <div className="stats-ribbon">
+        <div className="ribbon-stat">
+          <span className="ribbon-value">{stats?.today?.visitors || 0}</span>
+          <span className="ribbon-label">visitors</span>
+        </div>
+        <div className="ribbon-divider" />
+        <div className="ribbon-stat">
+          <span className="ribbon-value">{stats?.today?.conversations || 0}</span>
+          <span className="ribbon-label">convos</span>
+        </div>
+        <div className="ribbon-divider" />
+        <div className="ribbon-stat">
+          <span className="ribbon-value">{stats?.today?.sales?.count || 0}</span>
+          <span className="ribbon-label">sales</span>
+        </div>
+        <div className="ribbon-divider" />
+        <div className="ribbon-stat highlight">
+          <span className="ribbon-value">{formatBaht(stats?.today?.sales?.revenue)}</span>
+          <span className="ribbon-label">revenue</span>
         </div>
       </div>
 
-      <div className="action-zone">
-        <button className="btn-action btn-walkby" onClick={onWalkBy}>
-          <span className="btn-icon">+</span>
-          <span className="btn-text">WALK-BY</span>
+      {/* Main action buttons */}
+      <div className="home-actions">
+        <button className="action-card action-conversation" onClick={onConversation}>
+          <div className="action-icon-wrap">
+            <span className="action-icon">💬</span>
+          </div>
+          <div className="action-text">
+            <h2>Log Conversation</h2>
+            <p>Full interaction details</p>
+          </div>
+          <div className="action-arrow">→</div>
         </button>
 
-        <button className="btn-action btn-conversation" onClick={onConversation}>
-          <span className="btn-icon">+</span>
-          <span className="btn-text">CONVERSATION</span>
-        </button>
-
-        <button className="btn-stats" onClick={onViewStats}>
-          📊 View Stats
+        <button className="action-card action-walkby" onClick={onWalkBy}>
+          <div className="action-icon-wrap">
+            <span className="action-icon">👋</span>
+          </div>
+          <div className="action-text">
+            <h2>Walk-by</h2>
+            <p>Paused but didn't engage</p>
+          </div>
+          <div className="action-counter">
+            <span className="counter-value">+1</span>
+          </div>
         </button>
       </div>
+
+      {/* Footer */}
+      <footer className="home-footer">
+        <div className="footer-user">
+          <div className="user-avatar">{staff?.name?.charAt(0) || '?'}</div>
+          <span className="user-name">{staff?.name}</span>
+        </div>
+        <div className="footer-location">K Village</div>
+      </footer>
     </div>
   )
 }
@@ -333,14 +368,16 @@ function StatsScreen({ stats, onBack }) {
   const data = period === 'today' ? stats?.today : stats?.week
 
   const calcPercent = (val, total) => total ? Math.round((val / total) * 100) : 0
-
+  const totalVisitors = data?.visitors || 0
+  const totalConvos = data?.conversations || 0
+  const walkBys = data?.walk_bys || 0
   const totalPriceSales = (data?.price_validation?.price_990 || 0) + (data?.price_validation?.price_1290 || 0)
 
   return (
     <div className="screen stats-screen">
       <header className="flow-header">
         <button className="btn-back" onClick={onBack}>← Home</button>
-        <span className="flow-title">📊 Stats</span>
+        <span className="flow-title">Stats</span>
       </header>
 
       <div className="period-tabs">
@@ -356,24 +393,38 @@ function StatsScreen({ stats, onBack }) {
 
       <div className="stats-content">
         <section className="stats-section">
-          <h3>TRAFFIC</h3>
-          <div className="stat-row">
-            <span>👥 {data?.visitors || 0} visitors</span>
-          </div>
-          <div className="stat-row">
-            <span>💬 {data?.conversations || 0} conversations ({calcPercent(data?.conversations, data?.visitors)}%)</span>
+          <h3>TRAFFIC FUNNEL</h3>
+          <div className="funnel">
+            <div className="funnel-row">
+              <span className="funnel-icon">👀</span>
+              <span className="funnel-label">Walk-bys</span>
+              <span className="funnel-value">{walkBys}</span>
+            </div>
+            <div className="funnel-arrow">↓</div>
+            <div className="funnel-row">
+              <span className="funnel-icon">💬</span>
+              <span className="funnel-label">Conversations</span>
+              <span className="funnel-value">{totalConvos}</span>
+              <span className="funnel-pct">{walkBys ? `${calcPercent(totalConvos, walkBys + totalConvos)}%` : '-'}</span>
+            </div>
+            <div className="funnel-arrow">↓</div>
+            <div className="funnel-row highlight">
+              <span className="funnel-icon">🛒</span>
+              <span className="funnel-label">Sales</span>
+              <span className="funnel-value">{data?.sales?.count || 0}</span>
+              <span className="funnel-pct">{totalConvos ? `${calcPercent(data?.sales?.count, totalConvos)}%` : '-'}</span>
+            </div>
           </div>
         </section>
 
         <section className="stats-section">
-          <h3>SALES</h3>
-          <div className="stat-row">
-            <span>🛒 {data?.sales?.count || 0} sales</span>
+          <h3>REVENUE</h3>
+          <div className="stat-row big">
             <span>{formatBaht(data?.sales?.revenue)}</span>
           </div>
           <div className="stat-row">
             <span>📦 {data?.sales?.boxes || 0} boxes</span>
-            <span>{formatBaht(data?.sales?.avg_per_sale)} avg/sale</span>
+            <span>{formatBaht(data?.sales?.avg_per_sale)} avg</span>
           </div>
         </section>
 
@@ -385,7 +436,7 @@ function StatsScreen({ stats, onBack }) {
             total={totalPriceSales}
           />
           <StatBar
-            label="฿1,290 sticker 🎯"
+            label="฿1,290 sticker"
             value={data?.price_validation?.price_1290 || 0}
             total={totalPriceSales}
             highlight
@@ -400,7 +451,7 @@ function StatsScreen({ stats, onBack }) {
         </section>
 
         <section className="stats-section">
-          <h3>PERSONAS (buyers only)</h3>
+          <h3>PERSONAS</h3>
           {['parent', 'gift_buyer', 'expat', 'future_parent'].map(p => (
             <StatBar
               key={p}
@@ -412,13 +463,13 @@ function StatsScreen({ stats, onBack }) {
         </section>
 
         <section className="stats-section">
-          <h3>HOOKS (all conversations)</h3>
+          <h3>HOOKS</h3>
           {['physical_kits', 'big_garden', 'signage'].map(h => (
             <StatBar
               key={h}
               label={h.replace('_', ' ')}
               value={data?.hooks?.[h] || 0}
-              total={data?.conversations || 1}
+              total={totalConvos || 1}
             />
           ))}
         </section>
@@ -467,13 +518,31 @@ function StatBar({ label, value, total, highlight }) {
   )
 }
 
+// Progress Steps Component
+function ProgressSteps({ current, total, labels }) {
+  return (
+    <div className="progress-steps">
+      {labels.map((label, i) => (
+        <div key={i} className={`progress-step ${i + 1 < current ? 'done' : ''} ${i + 1 === current ? 'active' : ''}`}>
+          <div className="step-dot">
+            {i + 1 < current ? '✓' : i + 1}
+          </div>
+          <span className="step-label">{label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const FLOW_LABELS = ['Who', 'Hook', 'Result', 'Lead']
+
 // Flow: Persona
 function FlowPersona({ onSelect, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">1 of 4</span>
+        <button className="btn-back" onClick={onBack}>✕</button>
+        <ProgressSteps current={1} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -507,8 +576,8 @@ function FlowHook({ onSelect, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">2 of 4</span>
+        <button className="btn-back" onClick={onBack}>←</button>
+        <ProgressSteps current={2} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -538,8 +607,8 @@ function FlowOutcome({ onSelect, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">3 of 4</span>
+        <button className="btn-back" onClick={onBack}>←</button>
+        <ProgressSteps current={3} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -575,8 +644,8 @@ function FlowObjection({ onSelect, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">3b of 4</span>
+        <button className="btn-back" onClick={onBack}>←</button>
+        <ProgressSteps current={3} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -628,8 +697,8 @@ function FlowQuantity({ onSubmit, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">3a of 4</span>
+        <button className="btn-back" onClick={onBack}>←</button>
+        <ProgressSteps current={3} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -664,7 +733,7 @@ function FlowQuantity({ onSubmit, onBack }) {
             onClick={() => setPrice(1290)}
           >
             <span className="option-label">฿1,290</span>
-            <span className="option-sublabel">Sticker 🎯</span>
+            <span className="option-sublabel">Sticker</span>
           </button>
         </div>
 
@@ -691,8 +760,8 @@ function FlowLead({ onSelect, onBack }) {
   return (
     <div className="screen flow-screen">
       <header className="flow-header">
-        <button className="btn-back" onClick={onBack}>← Back</button>
-        <span className="flow-step">4 of 4</span>
+        <button className="btn-back" onClick={onBack}>←</button>
+        <ProgressSteps current={4} total={4} labels={FLOW_LABELS} />
       </header>
 
       <div className="flow-content">
@@ -719,6 +788,18 @@ function FlowLead({ onSelect, onBack }) {
 
 // Confirmation Overlay
 function ConfirmationOverlay({ data, flowData }) {
+  // Walk-by confirmation
+  if (data?.type === 'walk_by') {
+    return (
+      <div className="confirmation-overlay walkby-confirm">
+        <div className="confirmation-card scale-in">
+          <div className="walkby-icon">👋</div>
+          <h3>Walk-by logged</h3>
+        </div>
+      </div>
+    )
+  }
+
   const getLabel = (key, value) => {
     const labels = {
       persona: { parent: 'Parent', gift_buyer: 'Gift Buyer', expat: 'Expat', future_parent: 'Future Parent' },
@@ -753,20 +834,16 @@ function ConfirmationOverlay({ data, flowData }) {
         </div>
         <h3>Saved!</h3>
 
-        {data.type === 'walk_by' ? (
-          <p className="confirmation-detail">Walk-by logged</p>
-        ) : (
-          <div className="confirmation-details">
-            <p>{getLabel('persona', allData.persona)} → {getLabel('hook', allData.hook)}</p>
-            {allData.sale_type === 'single' && (
-              <p>{allData.quantity}× Single @ {formatBaht(allData.unit_price)} = {formatBaht(allData.total_amount)}</p>
-            )}
-            {allData.sale_type === 'bundle_3' && <p>3-Box Bundle {formatBaht(2690)}</p>}
-            {allData.sale_type === 'full_year' && <p>Full Year {formatBaht(4990)}</p>}
-            {allData.sale_type === 'none' && <p>No sale - {getLabel('objection', allData.objection)?.replace(/_/g, ' ')}</p>}
-            <p>{getLabel('lead_type', allData.lead_type)}</p>
-          </div>
-        )}
+        <div className="confirmation-details">
+          <p>{getLabel('persona', allData.persona)} → {getLabel('hook', allData.hook)}</p>
+          {allData.sale_type === 'single' && (
+            <p>{allData.quantity}× Single @ {formatBaht(allData.unit_price)} = {formatBaht(allData.total_amount)}</p>
+          )}
+          {allData.sale_type === 'bundle_3' && <p>3-Box Bundle {formatBaht(2690)}</p>}
+          {allData.sale_type === 'full_year' && <p>Full Year {formatBaht(4990)}</p>}
+          {allData.sale_type === 'none' && <p>No sale - {getLabel('objection', allData.objection)?.replace(/_/g, ' ')}</p>}
+          <p>{getLabel('lead_type', allData.lead_type)}</p>
+        </div>
       </div>
     </div>
   )

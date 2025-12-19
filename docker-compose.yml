@@ -1,12 +1,9 @@
-version: "3.8"
-
 services:
   insights-api:
     build: ./api
     container_name: lumicello-insights-api
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    network_mode: host
     environment:
       DATABASE_URL: postgresql://postgres:26Nse4RDplFJfqkwHyUUPPrp@persistence:5432/lumicello_insights
     volumes:
@@ -16,25 +13,16 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - default
 
   insights-web:
     build: ./web
     container_name: lumicello-insights-web
     restart: unless-stopped
-    ports:
-      - "3000:80"
+    network_mode: host
     depends_on:
       - insights-api
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - default
-
-networks:
-  default:
-    driver: bridge

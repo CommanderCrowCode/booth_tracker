@@ -119,28 +119,31 @@ async def health():
 
 @app.get("/api/whoami")
 async def whoami(request: Request):
-    """Identify staff member from Tailscale IP."""
+    """Identify staff member from Tailscale IP. Auto-registers any Tailscale device."""
     client_ip = get_client_ip(request)
 
     # Get device info from Tailscale
     device = await get_tailscale_device(client_ip)
     if not device:
-        raise HTTPException(status_code=404, detail=f"Device not found for IP {client_ip}")
+        raise HTTPException(status_code=404, detail=f"Device not found for IP {client_ip}. Are you connected via Tailscale?")
 
     hostname = device["hostname"]
+    display_name = device["display_name"] or hostname.title()
 
-    # Look up in staff table
+    # Auto-register if not in staff table (any Tailscale device is trusted)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT device_name, display_name FROM staff WHERE device_name = $1",
             hostname
         )
 
-    if not row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Staff not registered for device '{hostname}'. Contact admin."
-        )
+        if not row:
+            # Auto-register this Tailscale device
+            await conn.execute(
+                "INSERT INTO staff (device_name, display_name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                hostname, display_name
+            )
+            row = {"device_name": hostname, "display_name": display_name}
 
     return {
         "device": row["device_name"],
@@ -171,6 +174,12 @@ async def get_stats(period: str = "today"):
         # Conversations only
         conversations = await conn.fetchval(
             "SELECT COUNT(*) FROM interactions WHERE timestamp >= $1 AND interaction_type = 'conversation'",
+            start_date
+        )
+
+        # Walk-bys only
+        walk_bys = await conn.fetchval(
+            "SELECT COUNT(*) FROM interactions WHERE timestamp >= $1 AND interaction_type = 'walk_by'",
             start_date
         )
 
@@ -256,6 +265,7 @@ async def get_stats(period: str = "today"):
         "period": period,
         "visitors": visitors or 0,
         "conversations": conversations or 0,
+        "walk_bys": walk_bys or 0,
         "sales": {
             "count": sales_data["sales_count"] or 0,
             "revenue": sales_data["revenue"] or 0,
@@ -285,18 +295,17 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
     # Get device info
     device = await get_tailscale_device(client_ip)
     if not device:
-        raise HTTPException(status_code=401, detail="Unknown device")
+        raise HTTPException(status_code=401, detail="Unknown device. Are you connected via Tailscale?")
 
     hostname = device["hostname"]
+    display_name = device["display_name"] or hostname.title()
 
-    # Verify staff exists
+    # Auto-register if needed (any Tailscale device is trusted)
     async with db_pool.acquire() as conn:
-        staff = await conn.fetchrow(
-            "SELECT device_name FROM staff WHERE device_name = $1",
-            hostname
+        await conn.execute(
+            "INSERT INTO staff (device_name, display_name) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            hostname, display_name
         )
-        if not staff:
-            raise HTTPException(status_code=401, detail=f"Staff not registered: {hostname}")
 
         # Calculate total_amount if not provided
         total_amount = interaction.total_amount
