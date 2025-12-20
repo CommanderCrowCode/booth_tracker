@@ -55,6 +55,69 @@ async function api(endpoint, options = {}) {
   return res.json()
 }
 
+// Real-time updates hook using Server-Sent Events
+function useRealtimeUpdates(onDataChange) {
+  useEffect(() => {
+    let eventSource = null
+    let reconnectTimeout = null
+    let reconnectAttempts = 0
+    const maxReconnectDelay = 30000 // 30 seconds max
+
+    const connect = () => {
+      // Clean up existing connection
+      if (eventSource) {
+        eventSource.close()
+      }
+
+      eventSource = new EventSource(`${API_BASE}/events/stream`)
+
+      eventSource.onopen = () => {
+        console.log('SSE: Connected for real-time updates')
+        reconnectAttempts = 0 // Reset on successful connection
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'data_change') {
+            console.log('SSE: Data changed:', data.table, data.action)
+            onDataChange(data)
+          } else if (data.type === 'connected') {
+            console.log('SSE: Connection confirmed')
+          }
+          // Ignore heartbeat messages
+        } catch (err) {
+          console.warn('SSE: Failed to parse message:', err)
+        }
+      }
+
+      eventSource.onerror = (err) => {
+        console.log('SSE: Connection error, will reconnect...')
+        eventSource.close()
+
+        // Exponential backoff for reconnection
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay)
+        reconnectAttempts++
+
+        reconnectTimeout = setTimeout(connect, delay)
+      }
+    }
+
+    // Initial connection
+    connect()
+
+    // Cleanup on unmount
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout)
+      }
+    }
+  }, [onDataChange])
+}
+
 // Main App Component
 function App() {
   const [screen, setScreen] = useState('loading')
@@ -181,6 +244,31 @@ function App() {
       console.error('Failed to load trash:', err)
     }
   }, [])
+
+  // Handle real-time data changes from SSE
+  const handleDataChange = useCallback((change) => {
+    // Refresh stats when interactions change
+    if (change.table === 'interactions') {
+      loadStats(statsPeriod)
+      // If on browse screen, refresh the list
+      if (screen === 'browse') {
+        loadBrowseData(browseFilters)
+      }
+      // If on trash screen, refresh trash
+      if (screen === 'trash') {
+        loadTrashData()
+      }
+    }
+    // Refresh timeline when events change
+    if (change.table === 'events') {
+      if (screen === 'browse' && Object.keys(browseFilters).length === 0) {
+        loadBrowseData({})
+      }
+    }
+  }, [statsPeriod, screen, browseFilters, loadStats, loadBrowseData, loadTrashData])
+
+  // Subscribe to real-time updates
+  useRealtimeUpdates(handleDataChange)
 
   // Select seller
   const selectSeller = async (sellerId) => {
