@@ -1,15 +1,18 @@
-"""Lumicello Event Insights Logger API - Phase 2 & 3"""
+"""Lumicello Event Insights Logger API - Phase 2 & 3 with Real-time Updates"""
+import asyncio
+import json
 import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Set
 from uuid import UUID
 
 import asyncpg
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ.get(
@@ -22,12 +25,68 @@ TAILSCALE_SOCKET = "/var/run/tailscale/tailscaled.sock"
 # Database connection pool
 db_pool: Optional[asyncpg.Pool] = None
 
+# SSE Broadcaster - manages connected clients for real-time updates
+class SSEBroadcaster:
+    def __init__(self):
+        self.clients: Set[asyncio.Queue] = set()
+        self._listener_task: Optional[asyncio.Task] = None
+        self._listener_conn: Optional[asyncpg.Connection] = None
+
+    async def start_listening(self, pool: asyncpg.Pool):
+        """Start listening to PostgreSQL notifications."""
+        self._listener_conn = await pool.acquire()
+        await self._listener_conn.add_listener('data_change', self._on_notification)
+        print("SSE: Started listening for database notifications")
+
+    def _on_notification(self, conn, pid, channel, payload):
+        """Handle incoming PostgreSQL notifications."""
+        asyncio.create_task(self._broadcast(payload))
+
+    async def _broadcast(self, message: str):
+        """Broadcast message to all connected SSE clients."""
+        disconnected = set()
+        for queue in self.clients:
+            try:
+                await queue.put(message)
+            except Exception:
+                disconnected.add(queue)
+        # Clean up disconnected clients
+        self.clients -= disconnected
+
+    async def subscribe(self) -> asyncio.Queue:
+        """Subscribe a new client and return their message queue."""
+        queue = asyncio.Queue()
+        self.clients.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue):
+        """Unsubscribe a client."""
+        self.clients.discard(queue)
+
+    async def stop(self):
+        """Stop listening and clean up."""
+        if self._listener_conn:
+            await self._listener_conn.remove_listener('data_change', self._on_notification)
+
+# Global broadcaster instance
+broadcaster = SSEBroadcaster()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+
+    # Start SSE listener for real-time notifications
+    try:
+        await broadcaster.start_listening(db_pool)
+    except Exception as e:
+        print(f"Warning: Could not start SSE listener: {e}")
+
     yield
+
+    # Cleanup
+    await broadcaster.stop()
     await db_pool.close()
 
 
@@ -1330,3 +1389,53 @@ async def get_timeline(
         "items": all_items[:limit],
         "has_more": len(all_items) > limit
     }
+
+
+# ============================================================
+# REAL-TIME UPDATES VIA SERVER-SENT EVENTS (SSE)
+# ============================================================
+
+@app.get("/api/events/stream")
+async def sse_stream():
+    """Server-Sent Events endpoint for real-time data updates.
+
+    Clients connect to this endpoint to receive push notifications
+    when data changes in the database (new interactions, events, etc.)
+    """
+    async def event_generator():
+        queue = await broadcaster.subscribe()
+        try:
+            # Send initial connection confirmation
+            yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+
+            # Send heartbeat every 30 seconds to keep connection alive
+            heartbeat_interval = 30
+
+            while True:
+                try:
+                    # Wait for message with timeout for heartbeat
+                    message = await asyncio.wait_for(queue.get(), timeout=heartbeat_interval)
+                    # Parse and forward the database notification
+                    try:
+                        data = json.loads(message)
+                        data['type'] = 'data_change'
+                        yield f"data: {json.dumps(data)}\n\n"
+                    except json.JSONDecodeError:
+                        yield f"data: {json.dumps({'type': 'data_change', 'raw': message})}\n\n"
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )

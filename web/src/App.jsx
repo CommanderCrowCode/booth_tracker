@@ -55,12 +55,76 @@ async function api(endpoint, options = {}) {
   return res.json()
 }
 
+// Real-time updates hook using Server-Sent Events
+function useRealtimeUpdates(onDataChange) {
+  useEffect(() => {
+    let eventSource = null
+    let reconnectTimeout = null
+    let reconnectAttempts = 0
+    const maxReconnectDelay = 30000 // 30 seconds max
+
+    const connect = () => {
+      // Clean up existing connection
+      if (eventSource) {
+        eventSource.close()
+      }
+
+      eventSource = new EventSource(`${API_BASE}/events/stream`)
+
+      eventSource.onopen = () => {
+        console.log('SSE: Connected for real-time updates')
+        reconnectAttempts = 0 // Reset on successful connection
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'data_change') {
+            console.log('SSE: Data changed:', data.table, data.action)
+            onDataChange(data)
+          } else if (data.type === 'connected') {
+            console.log('SSE: Connection confirmed')
+          }
+          // Ignore heartbeat messages
+        } catch (err) {
+          console.warn('SSE: Failed to parse message:', err)
+        }
+      }
+
+      eventSource.onerror = (err) => {
+        console.log('SSE: Connection error, will reconnect...')
+        eventSource.close()
+
+        // Exponential backoff for reconnection
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay)
+        reconnectAttempts++
+
+        reconnectTimeout = setTimeout(connect, delay)
+      }
+    }
+
+    // Initial connection
+    connect()
+
+    // Cleanup on unmount
+    return () => {
+      if (eventSource) {
+        eventSource.close()
+      }
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout)
+      }
+    }
+  }, [onDataChange])
+}
+
 // Main App Component
 function App() {
   const [screen, setScreen] = useState('loading')
   const [staff, setStaff] = useState(null)
   const [session, setSession] = useState(null)
   const [stats, setStats] = useState(null)
+  const [statsPeriod, setStatsPeriod] = useState('today') // 'today', 'week', 'all'
   const [sellerStats, setSellerStats] = useState(null)
   const [error, setError] = useState(null)
   const [flowData, setFlowData] = useState({})
@@ -99,18 +163,26 @@ function App() {
       })
   }, [])
 
-  // Load stats
-  const loadStats = useCallback(async () => {
+  // Load stats for a specific period
+  const loadStats = useCallback(async (period = 'today') => {
     try {
-      const [today, week] = await Promise.all([
-        api('/stats?period=today'),
-        api('/stats?period=week')
-      ])
-      setStats({ today, week })
+      const data = await api(`/stats?period=${period}`)
+      setStats(prev => ({ ...prev, [period]: data }))
     } catch (err) {
       console.error('Failed to load stats:', err)
     }
   }, [])
+
+  // Cycle through periods for the header toggle
+  const cyclePeriod = useCallback(() => {
+    const periods = ['today', 'week', 'all']
+    const currentIndex = periods.indexOf(statsPeriod)
+    const nextPeriod = periods[(currentIndex + 1) % periods.length]
+    setStatsPeriod(nextPeriod)
+    if (!stats?.[nextPeriod]) {
+      loadStats(nextPeriod)
+    }
+  }, [statsPeriod, stats, loadStats])
 
   // Load seller stats
   const loadSellerStats = useCallback(async (period = 'today') => {
@@ -172,6 +244,31 @@ function App() {
       console.error('Failed to load trash:', err)
     }
   }, [])
+
+  // Handle real-time data changes from SSE
+  const handleDataChange = useCallback((change) => {
+    // Refresh stats when interactions change
+    if (change.table === 'interactions') {
+      loadStats(statsPeriod)
+      // If on browse screen, refresh the list
+      if (screen === 'browse') {
+        loadBrowseData(browseFilters)
+      }
+      // If on trash screen, refresh trash
+      if (screen === 'trash') {
+        loadTrashData()
+      }
+    }
+    // Refresh timeline when events change
+    if (change.table === 'events') {
+      if (screen === 'browse' && Object.keys(browseFilters).length === 0) {
+        loadBrowseData({})
+      }
+    }
+  }, [statsPeriod, screen, browseFilters, loadStats, loadBrowseData, loadTrashData])
+
+  // Subscribe to real-time updates
+  useRealtimeUpdates(handleDataChange)
 
   // Select seller
   const selectSeller = async (sellerId) => {
@@ -340,10 +437,12 @@ function App() {
           session={session}
           staff={staff}
           stats={stats}
+          statsPeriod={statsPeriod}
+          onCyclePeriod={cyclePeriod}
           onConversation={startConversation}
           onWalkBy={logWalkBy}
           onViewStats={() => {
-            loadSellerStats('today')
+            loadSellerStats(statsPeriod)
             setScreen('stats')
           }}
           onLogEvent={() => setEventModal(true)}
@@ -353,6 +452,11 @@ function App() {
       {screen === 'stats' && (
         <StatsScreen
           stats={stats}
+          statsPeriod={statsPeriod}
+          onPeriodChange={(p) => {
+            setStatsPeriod(p)
+            if (!stats?.[p]) loadStats(p)
+          }}
           sellerStats={sellerStats}
           sankeyData={sankeyData}
           onLoadSellerStats={loadSellerStats}
@@ -598,8 +702,10 @@ function SellerSelectScreen({ session, onSelect }) {
 }
 
 // Home Screen
-function HomeScreen({ session, staff, stats, onConversation, onWalkBy, onViewStats, onLogEvent }) {
+function HomeScreen({ session, staff, stats, statsPeriod, onCyclePeriod, onConversation, onWalkBy, onViewStats, onLogEvent }) {
   const displayName = session?.active_seller?.display_name || staff?.name || 'Staff'
+  const periodLabels = { today: 'Today', week: 'Week', all: 'All Time' }
+  const currentStats = stats?.[statsPeriod]
 
   return (
     <div className="screen home-screen">
@@ -623,23 +729,30 @@ function HomeScreen({ session, staff, stats, onConversation, onWalkBy, onViewSta
       </header>
 
       <div className="stats-ribbon">
+        <button className="period-toggle" onClick={onCyclePeriod}>
+          <span className="period-label">{periodLabels[statsPeriod]}</span>
+          <svg viewBox="0 0 12 12" className="period-chevron">
+            <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+        <div className="ribbon-divider" />
         <div className="ribbon-stat">
-          <span className="ribbon-value">{stats?.today?.visitors || 0}</span>
+          <span className="ribbon-value">{currentStats?.visitors || 0}</span>
           <span className="ribbon-label">visitors</span>
         </div>
         <div className="ribbon-divider" />
         <div className="ribbon-stat">
-          <span className="ribbon-value">{stats?.today?.conversations || 0}</span>
+          <span className="ribbon-value">{currentStats?.conversations || 0}</span>
           <span className="ribbon-label">convos</span>
         </div>
         <div className="ribbon-divider" />
         <div className="ribbon-stat">
-          <span className="ribbon-value">{stats?.today?.sales?.count || 0}</span>
+          <span className="ribbon-value">{currentStats?.sales?.count || 0}</span>
           <span className="ribbon-label">sales</span>
         </div>
         <div className="ribbon-divider" />
         <div className="ribbon-stat highlight">
-          <span className="ribbon-value">{formatBaht(stats?.today?.sales?.revenue)}</span>
+          <span className="ribbon-value">{formatBaht(currentStats?.sales?.revenue)}</span>
           <span className="ribbon-label">revenue</span>
         </div>
       </div>
@@ -691,19 +804,18 @@ function HomeScreen({ session, staff, stats, onConversation, onWalkBy, onViewSta
 }
 
 // Stats Screen (Updated with Phase 2 & 3)
-function StatsScreen({ stats, sellerStats, sankeyData, onLoadSellerStats, onLoadSankey, onBack, onBrowse, onSankey, onConfig }) {
-  const [period, setPeriod] = useState('today')
-  const data = period === 'today' ? stats?.today : stats?.week
+function StatsScreen({ stats, statsPeriod, onPeriodChange, sellerStats, sankeyData, onLoadSellerStats, onLoadSankey, onBack, onBrowse, onSankey, onConfig }) {
+  const data = stats?.[statsPeriod]
 
   const handlePeriodChange = (p) => {
-    setPeriod(p)
+    onPeriodChange(p)
     onLoadSellerStats(p)
     onLoadSankey(p)
   }
 
   // Load sankey data on mount
   useEffect(() => {
-    onLoadSankey('today')
+    onLoadSankey(statsPeriod)
   }, [])
 
   const totalPriceSales = (data?.price_validation?.price_990 || 0) + (data?.price_validation?.price_1290 || 0)
@@ -716,8 +828,9 @@ function StatsScreen({ stats, sellerStats, sankeyData, onLoadSellerStats, onLoad
       </header>
 
       <div className="period-tabs">
-        <button className={`tab ${period === 'today' ? 'active' : ''}`} onClick={() => handlePeriodChange('today')}>Today</button>
-        <button className={`tab ${period === 'week' ? 'active' : ''}`} onClick={() => handlePeriodChange('week')}>Week</button>
+        <button className={`tab ${statsPeriod === 'today' ? 'active' : ''}`} onClick={() => handlePeriodChange('today')}>Today</button>
+        <button className={`tab ${statsPeriod === 'week' ? 'active' : ''}`} onClick={() => handlePeriodChange('week')}>Week</button>
+        <button className={`tab ${statsPeriod === 'all' ? 'active' : ''}`} onClick={() => handlePeriodChange('all')}>All</button>
       </div>
 
       <div className="stats-content">

@@ -276,6 +276,37 @@ button {
   background: rgba(0,0,0,0.08);
 }
 
+/* Period Toggle in Ribbon */
+.period-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--terracotta);
+  border-radius: 16px;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.2s ease;
+}
+
+.period-toggle:active {
+  background: var(--terracotta-dark);
+  transform: scale(0.96);
+}
+
+.period-label {
+  white-space: nowrap;
+}
+
+.period-chevron {
+  width: 10px;
+  height: 10px;
+  opacity: 0.8;
+}
+
 /* Home Actions */
 .home-actions {
   flex: 1;
