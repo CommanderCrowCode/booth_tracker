@@ -51,12 +51,20 @@ class SSEBroadcaster:
         self.clients: Set[asyncio.Queue] = set()
         self._listener_task: Optional[asyncio.Task] = None
         self._listener_conn: Optional[asyncpg.Connection] = None
+        self._pool: Optional[asyncpg.Pool] = None
 
     async def start_listening(self, pool: asyncpg.Pool):
         """Start listening to PostgreSQL notifications."""
+        self._pool = pool
         self._listener_conn = await pool.acquire()
-        await self._listener_conn.add_listener('data_change', self._on_notification)
-        print("SSE: Started listening for database notifications")
+        try:
+            await self._listener_conn.add_listener('data_change', self._on_notification)
+            print("SSE: Started listening for database notifications")
+        except Exception as e:
+            # Release connection on failure to prevent leak
+            await pool.release(self._listener_conn)
+            self._listener_conn = None
+            raise e
 
     def _on_notification(self, conn, pid, channel, payload):
         """Handle incoming PostgreSQL notifications."""
@@ -87,6 +95,9 @@ class SSEBroadcaster:
         """Stop listening and clean up."""
         if self._listener_conn:
             await self._listener_conn.remove_listener('data_change', self._on_notification)
+            if self._pool:
+                await self._pool.release(self._listener_conn)
+            self._listener_conn = None
 
 # Global broadcaster instance
 broadcaster = SSEBroadcaster()

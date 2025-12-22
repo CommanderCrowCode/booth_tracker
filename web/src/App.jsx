@@ -778,7 +778,7 @@ function SellerSelectScreen({ session, onSelect }) {
 // Home Screen
 function HomeScreen({ session, staff, stats, statsPeriod, onCyclePeriod, onConversation, onWalkBy, onViewStats, onLogEvent, onPastLog }) {
   const displayName = session?.active_seller?.display_name || staff?.name || 'Staff'
-  const periodLabels = { today: 'Today', week: 'Week', all: 'All Time' }
+  const periodLabels = { today: "Today's Stats", week: 'This Week', all: 'All Time' }
   const currentStats = stats?.[statsPeriod]
 
   return (
