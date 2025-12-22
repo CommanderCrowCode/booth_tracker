@@ -2120,6 +2120,7 @@ function PastLogTypeScreen({ onConversation, onWalkBy, onBack }) {
 function CustomTimestampModal({ data, onContinue, onClose }) {
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     // Set default to current date/time
@@ -2131,9 +2132,30 @@ function CustomTimestampModal({ data, onContinue, onClose }) {
   }, [])
 
   const handleContinue = () => {
-    if (!date || !time) return
-    const timestamp = new Date(`${date}T${time}:00`).toISOString()
-    onContinue(timestamp)
+    if (!date || !time) {
+      setError('Please select both date and time')
+      return
+    }
+
+    const timestamp = new Date(`${date}T${time}:00`)
+    const now = new Date()
+
+    // Validate not in the future
+    if (timestamp > now) {
+      setError('Cannot select a future date/time')
+      return
+    }
+
+    // Validate not more than 30 days in the past
+    const maxBackdate = new Date()
+    maxBackdate.setDate(maxBackdate.getDate() - 30)
+    if (timestamp < maxBackdate) {
+      setError('Cannot backdate more than 30 days')
+      return
+    }
+
+    setError('')
+    onContinue(timestamp.toISOString())
   }
 
   return (
@@ -2159,7 +2181,8 @@ function CustomTimestampModal({ data, onContinue, onClose }) {
             />
           </div>
         </div>
-        <p className="modal-hint">Select the date and time of the past interaction</p>
+        <p className="modal-hint">Select the date and time of the past interaction (max 30 days ago)</p>
+        {error && <p className="modal-error">{error}</p>}
         <div className="modal-actions">
           <button className="btn-cancel" onClick={onClose}>Cancel</button>
           <button className="btn-save" onClick={handleContinue} disabled={!date || !time}>Continue →</button>
@@ -2182,6 +2205,7 @@ function EditInteractionModal({ interaction, onSave, onClose }) {
     lead_type: interaction.lead_type || '',
     objection: interaction.objection || ''
   })
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (interaction.timestamp) {
@@ -2198,7 +2222,24 @@ function EditInteractionModal({ interaction, onSave, onClose }) {
     // Only include changed fields
     if (formData.timestamp && formData.timestamp !== interaction.timestamp) {
       const [dateStr, timeStr] = formData.timestamp.split('T')
-      updates.timestamp = new Date(`${dateStr}T${timeStr}:00`).toISOString()
+      const newTimestamp = new Date(`${dateStr}T${timeStr}:00`)
+      const now = new Date()
+
+      // Validate not in the future
+      if (newTimestamp > now) {
+        setError('Cannot select a future date/time')
+        return
+      }
+
+      // Validate not more than 30 days in the past
+      const maxBackdate = new Date()
+      maxBackdate.setDate(maxBackdate.getDate() - 30)
+      if (newTimestamp < maxBackdate) {
+        setError('Cannot backdate more than 30 days')
+        return
+      }
+
+      updates.timestamp = newTimestamp.toISOString()
     }
     if (formData.persona !== interaction.persona) updates.persona = formData.persona || null
     if (formData.hook !== interaction.hook) updates.hook = formData.hook || null
@@ -2214,6 +2255,7 @@ function EditInteractionModal({ interaction, onSave, onClose }) {
       return
     }
 
+    setError('')
     onSave(updates)
   }
 
@@ -2315,6 +2357,7 @@ function EditInteractionModal({ interaction, onSave, onClose }) {
           )}
         </div>
 
+        {error && <p className="modal-error">{error}</p>}
         <div className="modal-actions">
           <button className="btn-cancel" onClick={onClose}>Cancel</button>
           <button className="btn-save" onClick={handleSave}>Save Changes</button>

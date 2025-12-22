@@ -38,6 +38,9 @@ PRICE_1290 = 1290
 BUNDLE_3_PRICE = 2690
 FULL_YEAR_PRICE = 4990
 
+# Timestamp validation constants
+MAX_BACKDATE_DAYS = 30  # Maximum days in the past for custom timestamps
+
 
 # Database connection pool
 db_pool: Optional[asyncpg.Pool] = None
@@ -443,6 +446,20 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
         # Use provided timestamp or current time (timezone-aware)
         timestamp = interaction.timestamp or datetime.now(timezone.utc)
 
+        # Validate timestamp if provided
+        if interaction.timestamp:
+            now = datetime.now(timezone.utc)
+            # Prevent future timestamps
+            if timestamp > now:
+                raise HTTPException(status_code=400, detail="Timestamp cannot be in the future")
+            # Prevent backdating beyond limit
+            min_allowed = now - timedelta(days=MAX_BACKDATE_DAYS)
+            if timestamp < min_allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Timestamp cannot be more than {MAX_BACKDATE_DAYS} days in the past"
+                )
+
         # Insert interaction with engaged, seller_id, and custom timestamp
         row = await conn.fetchrow("""
             INSERT INTO interactions (
@@ -757,9 +774,17 @@ async def update_interaction(interaction_id: str, update: InteractionUpdate):
         raise HTTPException(status_code=400, detail="Total amount cannot be negative")
 
     if update.timestamp is not None:
+        now = datetime.now(timezone.utc)
         # Prevent future timestamps
-        if update.timestamp > datetime.now(timezone.utc):
+        if update.timestamp > now:
             raise HTTPException(status_code=400, detail="Timestamp cannot be in the future")
+        # Prevent backdating beyond limit
+        min_allowed = now - timedelta(days=MAX_BACKDATE_DAYS)
+        if update.timestamp < min_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Timestamp cannot be more than {MAX_BACKDATE_DAYS} days in the past"
+            )
 
     async with db_pool.acquire() as conn:
         # Use transaction for atomicity
