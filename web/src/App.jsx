@@ -1016,6 +1016,10 @@ function StatsScreen({ stats, statsPeriod, onPeriodChange, sellerStats, sankeyDa
             <span>📧 Email</span>
             <span>{data?.leads?.email || 0}</span>
           </div>
+          <div className="stat-row">
+            <span>📸 Instagram</span>
+            <span>{data?.leads?.instagram || 0}</span>
+          </div>
         </section>
 
         {/* Phase 2 Navigation Buttons */}
@@ -1152,7 +1156,7 @@ function InteractionCard({ item, onClick }) {
 
   const personaLabel = item.persona ? item.persona.replace('_', ' ') : ''
   const hookIcon = item.hook === 'physical_kits' ? '📦' : item.hook === 'big_garden' ? '📱' : '🪧'
-  const leadIcon = item.lead_type === 'line' ? '💚' : item.lead_type === 'email' ? '📧' : ''
+  const leadIcon = item.lead_type === 'line' ? '💚' : item.lead_type === 'email' ? '📧' : item.lead_type === 'instagram' ? '📸' : ''
 
   return (
     <div className="timeline-card interaction-card" onClick={onClick}>
@@ -1233,7 +1237,7 @@ function DetailScreen({ interaction, onBack, onAddNote, onDelete, onEdit }) {
               )}
               <div className="detail-row">
                 <span className="detail-label">Lead</span>
-                <span className="detail-value">{i.lead_type === 'line' ? '💚 LINE' : i.lead_type === 'email' ? '📧 Email' : 'None'}</span>
+                <span className="detail-value">{i.lead_type === 'line' ? '💚 LINE' : i.lead_type === 'email' ? '📧 Email' : i.lead_type === 'instagram' ? '📸 Instagram' : 'None'}</span>
               </div>
               {i.objection && (
                 <div className="detail-row">
@@ -2014,6 +2018,10 @@ function FlowLead({ onSelect, onBack }) {
             <span className="option-icon">📧</span>
             <span className="option-label">Email</span>
           </button>
+          <button className="flow-option-wide" onClick={() => onSelect('instagram')}>
+            <span className="option-icon">📸</span>
+            <span className="option-label">Instagram</span>
+          </button>
           <button className="flow-option-wide lead-none" onClick={() => onSelect('none')}>
             <span className="option-icon">➖</span>
             <span className="option-label">None</span>
@@ -2059,7 +2067,7 @@ function ConfirmationOverlay({ data, flowData }) {
       persona: { parent: 'Parent', gift_buyer: 'Gift Buyer', expat: 'Expat', future_parent: 'Future Parent' },
       hook: { physical_kits: 'Physical Kits', big_garden: 'Big Garden', signage: 'Signage' },
       sale_type: { none: 'No Sale', single: 'Single', bundle_3: '3-Box Bundle', full_year: 'Full Year' },
-      lead_type: { line: 'LINE signup', email: 'Email signup', none: 'No lead' }
+      lead_type: { line: 'LINE signup', email: 'Email signup', instagram: 'Instagram signup', none: 'No lead' }
     }
     return labels[key]?.[value] || value
   }
@@ -2337,6 +2345,7 @@ function EditInteractionModal({ interaction, onSave, onClose }) {
                   <option value="none">None</option>
                   <option value="line">LINE</option>
                   <option value="email">Email</option>
+                  <option value="instagram">Instagram</option>
                 </select>
               </div>
 
