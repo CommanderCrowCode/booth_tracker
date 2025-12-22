@@ -664,11 +664,16 @@ function App() {
         <EditInteractionModal
           interaction={editModal}
           onSave={async (updates) => {
-            await updateInteraction(editModal.id, updates)
-            setEditModal(null)
-            // Refresh selected interaction
-            const updated = await api(`/interactions/${editModal.id}`)
-            setSelectedInteraction(updated)
+            try {
+              await updateInteraction(editModal.id, updates)
+              setEditModal(null)
+              // Refresh selected interaction
+              const updated = await api(`/interactions/${editModal.id}`)
+              setSelectedInteraction(updated)
+            } catch (err) {
+              alert('Failed to update interaction: ' + (err.message || 'Unknown error'))
+              console.error('Update error:', err)
+            }
           }}
           onClose={() => setEditModal(null)}
         />
