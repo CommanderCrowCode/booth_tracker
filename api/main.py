@@ -4,7 +4,7 @@ import json
 import os
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List, Set
 from uuid import UUID
 
@@ -20,6 +20,26 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres:26Nse4RDplFJfqkwHyUUPPrp@persistence:5432/lumicello_insights"
 )
 TAILSCALE_SOCKET = "/var/run/tailscale/tailscaled.sock"
+
+# Validation constants
+VALID_INTERACTION_TYPES = {"walk_by", "conversation"}
+VALID_PERSONAS = {"parent", "gift_buyer", "expat", "future_parent"}
+VALID_HOOKS = {"physical_kits", "big_garden", "signage"}
+VALID_SALE_TYPES = {"none", "single", "bundle_3", "full_year"}
+VALID_LEAD_TYPES = {"line", "email"}
+VALID_OBJECTIONS = {
+    "too_expensive", "not_interested", "no_time", "already_have",
+    "need_to_think", "language_barrier", "other"
+}
+
+# Pricing constants
+PRICE_990 = 990
+PRICE_1290 = 1290
+BUNDLE_3_PRICE = 2690
+FULL_YEAR_PRICE = 4990
+
+# Timestamp validation constants
+MAX_BACKDATE_DAYS = 30  # Maximum days in the past for custom timestamps
 
 
 # Database connection pool
@@ -112,6 +132,7 @@ class InteractionCreate(BaseModel):
     total_amount: Optional[int] = None
     lead_type: Optional[str] = None
     objection: Optional[str] = None
+    timestamp: Optional[datetime] = None  # Custom timestamp for logging past events
 
 
 class StaffCreate(BaseModel):
@@ -123,6 +144,16 @@ class StaffCreate(BaseModel):
 class InteractionUpdate(BaseModel):
     notes: Optional[str] = None
     deleted: Optional[bool] = None  # True = soft delete, False = restore
+    interaction_type: Optional[str] = None
+    persona: Optional[str] = None
+    hook: Optional[str] = None
+    sale_type: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[int] = None
+    total_amount: Optional[int] = None
+    lead_type: Optional[str] = None
+    objection: Optional[str] = None
+    timestamp: Optional[datetime] = None
 
 
 class SellerCreate(BaseModel):
@@ -198,7 +229,7 @@ def get_client_ip(request: Request) -> str:
 @app.get("/api/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/whoami")
@@ -239,14 +270,14 @@ async def whoami(request: Request):
 @app.get("/api/stats")
 async def get_stats(period: str = "today"):
     """Get aggregated stats for dashboard."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if period == "today":
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "week":
         start_date = now - timedelta(days=7)
     else:  # all
-        start_date = datetime(2020, 1, 1)
+        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
     async with db_pool.acquire() as conn:
         # Total visitors (walk_by + conversation) - exclude deleted
@@ -405,20 +436,37 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
             if interaction.sale_type == "single" and interaction.unit_price:
                 total_amount = interaction.quantity * interaction.unit_price
             elif interaction.sale_type == "bundle_3":
-                total_amount = 2690
+                total_amount = BUNDLE_3_PRICE
             elif interaction.sale_type == "full_year":
-                total_amount = 4990
+                total_amount = FULL_YEAR_PRICE
 
         # Determine engaged status based on interaction type
         engaged = interaction.interaction_type == "conversation"
 
-        # Insert interaction with engaged and seller_id
+        # Use provided timestamp or current time (timezone-aware)
+        timestamp = interaction.timestamp or datetime.now(timezone.utc)
+
+        # Validate timestamp if provided
+        if interaction.timestamp:
+            now = datetime.now(timezone.utc)
+            # Prevent future timestamps
+            if timestamp > now:
+                raise HTTPException(status_code=400, detail="Timestamp cannot be in the future")
+            # Prevent backdating beyond limit
+            min_allowed = now - timedelta(days=MAX_BACKDATE_DAYS)
+            if timestamp < min_allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Timestamp cannot be more than {MAX_BACKDATE_DAYS} days in the past"
+                )
+
+        # Insert interaction with engaged, seller_id, and custom timestamp
         row = await conn.fetchrow("""
             INSERT INTO interactions (
                 staff_device, interaction_type, engaged, persona, hook,
                 sale_type, quantity, unit_price, total_amount,
-                lead_type, objection, seller_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                lead_type, objection, seller_id, timestamp
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id, timestamp
         """,
             hostname,
@@ -432,7 +480,8 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
             total_amount,
             interaction.lead_type,
             interaction.objection,
-            seller_id
+            seller_id,
+            timestamp
         )
 
     return {
@@ -695,46 +744,157 @@ async def get_interaction(interaction_id: str):
 
 @app.patch("/api/interactions/{interaction_id}")
 async def update_interaction(interaction_id: str, update: InteractionUpdate):
-    """Update interaction (notes, soft delete/restore)."""
+    """Update interaction (notes, soft delete/restore, and all interaction fields)."""
+    # Input validation
+    if update.interaction_type is not None and update.interaction_type not in VALID_INTERACTION_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid interaction_type. Must be one of: {', '.join(VALID_INTERACTION_TYPES)}")
+
+    if update.persona is not None and update.persona and update.persona not in VALID_PERSONAS:
+        raise HTTPException(status_code=400, detail=f"Invalid persona. Must be one of: {', '.join(VALID_PERSONAS)}")
+
+    if update.hook is not None and update.hook and update.hook not in VALID_HOOKS:
+        raise HTTPException(status_code=400, detail=f"Invalid hook. Must be one of: {', '.join(VALID_HOOKS)}")
+
+    if update.sale_type is not None and update.sale_type and update.sale_type not in VALID_SALE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid sale_type. Must be one of: {', '.join(VALID_SALE_TYPES)}")
+
+    if update.lead_type is not None and update.lead_type and update.lead_type not in VALID_LEAD_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid lead_type. Must be one of: {', '.join(VALID_LEAD_TYPES)}")
+
+    if update.objection is not None and update.objection and update.objection not in VALID_OBJECTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid objection. Must be one of: {', '.join(VALID_OBJECTIONS)}")
+
+    if update.quantity is not None and update.quantity < 1:
+        raise HTTPException(status_code=400, detail="Quantity must be at least 1")
+
+    if update.unit_price is not None and update.unit_price not in [PRICE_990, PRICE_1290, None]:
+        raise HTTPException(status_code=400, detail=f"Invalid unit_price. Must be {PRICE_990} or {PRICE_1290}")
+
+    if update.total_amount is not None and update.total_amount < 0:
+        raise HTTPException(status_code=400, detail="Total amount cannot be negative")
+
+    if update.timestamp is not None:
+        now = datetime.now(timezone.utc)
+        # Prevent future timestamps
+        if update.timestamp > now:
+            raise HTTPException(status_code=400, detail="Timestamp cannot be in the future")
+        # Prevent backdating beyond limit
+        min_allowed = now - timedelta(days=MAX_BACKDATE_DAYS)
+        if update.timestamp < min_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Timestamp cannot be more than {MAX_BACKDATE_DAYS} days in the past"
+            )
+
     async with db_pool.acquire() as conn:
-        # Check if exists
-        exists = await conn.fetchval(
-            "SELECT 1 FROM interactions WHERE id = $1",
-            UUID(interaction_id)
-        )
-        if not exists:
-            raise HTTPException(status_code=404, detail="Interaction not found")
+        # Use transaction for atomicity
+        async with conn.transaction():
+            # Check if exists and get current state
+            current = await conn.fetchrow(
+                "SELECT interaction_type FROM interactions WHERE id = $1",
+                UUID(interaction_id)
+            )
+            if not current:
+                raise HTTPException(status_code=404, detail="Interaction not found")
 
-        # Build update query
-        updates = []
-        params = []
-        param_idx = 1
+            # Build update query
+            updates = []
+            params = []
+            param_idx = 1
 
-        if update.notes is not None:
-            updates.append(f"notes = ${param_idx}")
-            params.append(update.notes)
-            param_idx += 1
+            if update.notes is not None:
+                updates.append(f"notes = ${param_idx}")
+                params.append(update.notes)
+                param_idx += 1
 
-        if update.deleted is not None:
-            if update.deleted:
-                updates.append(f"deleted_at = ${param_idx}")
-                params.append(datetime.utcnow())
-            else:
-                updates.append("deleted_at = NULL")
-            param_idx += 1
+            if update.deleted is not None:
+                if update.deleted:
+                    updates.append(f"deleted_at = ${param_idx}")
+                    params.append(datetime.now(timezone.utc))
+                else:
+                    updates.append("deleted_at = NULL")
+                param_idx += 1
 
-        if not updates:
-            raise HTTPException(status_code=400, detail="No updates provided")
+            if update.interaction_type is not None:
+                updates.append(f"interaction_type = ${param_idx}")
+                params.append(update.interaction_type)
+                param_idx += 1
+                # Update engaged based on interaction type
+                engaged = update.interaction_type == "conversation"
+                updates.append(f"engaged = ${param_idx}")
+                params.append(engaged)
+                param_idx += 1
 
-        params.append(UUID(interaction_id))
-        query = f"""
-            UPDATE interactions
-            SET {", ".join(updates)}
-            WHERE id = ${param_idx}
-            RETURNING *
-        """
+                # Clear conversation-specific fields when changing to walk_by
+                if update.interaction_type == "walk_by" and current["interaction_type"] == "conversation":
+                    updates.extend([
+                        "persona = NULL",
+                        "hook = NULL",
+                        "sale_type = NULL",
+                        "quantity = NULL",
+                        "unit_price = NULL",
+                        "total_amount = NULL",
+                        "lead_type = NULL",
+                        "objection = NULL"
+                    ])
 
-        row = await conn.fetchrow(query, *params)
+            if update.persona is not None:
+                updates.append(f"persona = ${param_idx}")
+                params.append(update.persona if update.persona else None)
+                param_idx += 1
+
+            if update.hook is not None:
+                updates.append(f"hook = ${param_idx}")
+                params.append(update.hook if update.hook else None)
+                param_idx += 1
+
+            if update.sale_type is not None:
+                updates.append(f"sale_type = ${param_idx}")
+                params.append(update.sale_type if update.sale_type else None)
+                param_idx += 1
+
+            if update.quantity is not None:
+                updates.append(f"quantity = ${param_idx}")
+                params.append(update.quantity)
+                param_idx += 1
+
+            if update.unit_price is not None:
+                updates.append(f"unit_price = ${param_idx}")
+                params.append(update.unit_price)
+                param_idx += 1
+
+            if update.total_amount is not None:
+                updates.append(f"total_amount = ${param_idx}")
+                params.append(update.total_amount)
+                param_idx += 1
+
+            if update.lead_type is not None:
+                updates.append(f"lead_type = ${param_idx}")
+                params.append(update.lead_type if update.lead_type else None)
+                param_idx += 1
+
+            if update.objection is not None:
+                updates.append(f"objection = ${param_idx}")
+                params.append(update.objection if update.objection else None)
+                param_idx += 1
+
+            if update.timestamp is not None:
+                updates.append(f"timestamp = ${param_idx}")
+                params.append(update.timestamp)
+                param_idx += 1
+
+            if not updates:
+                raise HTTPException(status_code=400, detail="No updates provided")
+
+            params.append(UUID(interaction_id))
+            query = f"""
+                UPDATE interactions
+                SET {", ".join(updates)}
+                WHERE id = ${param_idx}
+                RETURNING *
+            """
+
+            row = await conn.fetchrow(query, *params)
 
     record = dict(row)
     record["id"] = str(record["id"])
@@ -791,7 +951,7 @@ async def get_sankey_data(
     period: Optional[str] = None  # today, week, all - alternative to dates
 ):
     """Aggregated data for Sankey diagram visualization."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Determine date range
     if period == "today":
@@ -804,7 +964,7 @@ async def get_sankey_data(
         start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
     else:
-        start_dt = datetime(2020, 1, 1)
+        start_dt = datetime(2020, 1, 1, tzinfo=timezone.utc)
         end_dt = now
 
     async with db_pool.acquire() as conn:
@@ -1104,7 +1264,7 @@ async def get_seller_analytics(
     period: Optional[str] = None
 ):
     """Performance metrics grouped by seller."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if period == "today":
         start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1116,7 +1276,7 @@ async def get_seller_analytics(
         start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
         end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
     else:
-        start_dt = datetime(2020, 1, 1)
+        start_dt = datetime(2020, 1, 1, tzinfo=timezone.utc)
         end_dt = now
 
     async with db_pool.acquire() as conn:
@@ -1406,7 +1566,7 @@ async def sse_stream():
         queue = await broadcaster.subscribe()
         try:
             # Send initial connection confirmation
-            yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+            yield f"data: {json.dumps({'type': 'connected', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
 
             # Send heartbeat every 30 seconds to keep connection alive
             heartbeat_interval = 30
@@ -1424,7 +1584,7 @@ async def sse_stream():
                         yield f"data: {json.dumps({'type': 'data_change', 'raw': message})}\n\n"
                 except asyncio.TimeoutError:
                     # Send heartbeat to keep connection alive
-                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.utcnow().isoformat()})}\n\n"
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
         except asyncio.CancelledError:
             pass
         finally:
