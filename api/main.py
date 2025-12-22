@@ -112,6 +112,7 @@ class InteractionCreate(BaseModel):
     total_amount: Optional[int] = None
     lead_type: Optional[str] = None
     objection: Optional[str] = None
+    timestamp: Optional[datetime] = None  # Custom timestamp for logging past events
 
 
 class StaffCreate(BaseModel):
@@ -123,6 +124,16 @@ class StaffCreate(BaseModel):
 class InteractionUpdate(BaseModel):
     notes: Optional[str] = None
     deleted: Optional[bool] = None  # True = soft delete, False = restore
+    interaction_type: Optional[str] = None
+    persona: Optional[str] = None
+    hook: Optional[str] = None
+    sale_type: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[int] = None
+    total_amount: Optional[int] = None
+    lead_type: Optional[str] = None
+    objection: Optional[str] = None
+    timestamp: Optional[datetime] = None
 
 
 class SellerCreate(BaseModel):
@@ -412,13 +423,16 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
         # Determine engaged status based on interaction type
         engaged = interaction.interaction_type == "conversation"
 
-        # Insert interaction with engaged and seller_id
+        # Use provided timestamp or current time
+        timestamp = interaction.timestamp or datetime.utcnow()
+
+        # Insert interaction with engaged, seller_id, and custom timestamp
         row = await conn.fetchrow("""
             INSERT INTO interactions (
                 staff_device, interaction_type, engaged, persona, hook,
                 sale_type, quantity, unit_price, total_amount,
-                lead_type, objection, seller_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                lead_type, objection, seller_id, timestamp
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id, timestamp
         """,
             hostname,
@@ -432,7 +446,8 @@ async def create_interaction(interaction: InteractionCreate, request: Request):
             total_amount,
             interaction.lead_type,
             interaction.objection,
-            seller_id
+            seller_id,
+            timestamp
         )
 
     return {
@@ -695,7 +710,7 @@ async def get_interaction(interaction_id: str):
 
 @app.patch("/api/interactions/{interaction_id}")
 async def update_interaction(interaction_id: str, update: InteractionUpdate):
-    """Update interaction (notes, soft delete/restore)."""
+    """Update interaction (notes, soft delete/restore, and all interaction fields)."""
     async with db_pool.acquire() as conn:
         # Check if exists
         exists = await conn.fetchval(
@@ -721,6 +736,61 @@ async def update_interaction(interaction_id: str, update: InteractionUpdate):
                 params.append(datetime.utcnow())
             else:
                 updates.append("deleted_at = NULL")
+            param_idx += 1
+
+        if update.interaction_type is not None:
+            updates.append(f"interaction_type = ${param_idx}")
+            params.append(update.interaction_type)
+            param_idx += 1
+            # Update engaged based on interaction type
+            engaged = update.interaction_type == "conversation"
+            updates.append(f"engaged = ${param_idx}")
+            params.append(engaged)
+            param_idx += 1
+
+        if update.persona is not None:
+            updates.append(f"persona = ${param_idx}")
+            params.append(update.persona)
+            param_idx += 1
+
+        if update.hook is not None:
+            updates.append(f"hook = ${param_idx}")
+            params.append(update.hook)
+            param_idx += 1
+
+        if update.sale_type is not None:
+            updates.append(f"sale_type = ${param_idx}")
+            params.append(update.sale_type)
+            param_idx += 1
+
+        if update.quantity is not None:
+            updates.append(f"quantity = ${param_idx}")
+            params.append(update.quantity)
+            param_idx += 1
+
+        if update.unit_price is not None:
+            updates.append(f"unit_price = ${param_idx}")
+            params.append(update.unit_price)
+            param_idx += 1
+
+        if update.total_amount is not None:
+            updates.append(f"total_amount = ${param_idx}")
+            params.append(update.total_amount)
+            param_idx += 1
+
+        if update.lead_type is not None:
+            updates.append(f"lead_type = ${param_idx}")
+            params.append(update.lead_type)
+            param_idx += 1
+
+        if update.objection is not None:
+            updates.append(f"objection = ${param_idx}")
+            params.append(update.objection)
+            param_idx += 1
+
+        if update.timestamp is not None:
+            updates.append(f"timestamp = ${param_idx}")
+            params.append(update.timestamp)
             param_idx += 1
 
         if not updates:

@@ -139,6 +139,8 @@ function App() {
   const [notesModal, setNotesModal] = useState(null)
   const [deleteModal, setDeleteModal] = useState(null)
   const [eventModal, setEventModal] = useState(false)
+  const [editModal, setEditModal] = useState(null)
+  const [customTimestampModal, setCustomTimestampModal] = useState(null)
 
   // Initialize app - go straight to home, seller assigned by device config
   useEffect(() => {
@@ -358,6 +360,11 @@ function App() {
         objection: data.objection
       }
 
+      // Add custom timestamp if provided
+      if (data.customTimestamp) {
+        payload.timestamp = data.customTimestamp
+      }
+
       await api('/interactions', {
         method: 'POST',
         body: JSON.stringify(payload)
@@ -365,6 +372,7 @@ function App() {
 
       showConfirmation(data)
       loadStats()
+      setFlowData({}) // Clear flow data including custom timestamp
     } catch (err) {
       alert('Failed to save: ' + err.message)
       setScreen('home')
@@ -446,6 +454,7 @@ function App() {
             setScreen('stats')
           }}
           onLogEvent={() => setEventModal(true)}
+          onPastLog={() => setCustomTimestampModal({ type: 'choose' })}
         />
       )}
 
@@ -505,6 +514,7 @@ function App() {
           }}
           onAddNote={() => setNotesModal(selectedInteraction)}
           onDelete={() => setDeleteModal(selectedInteraction)}
+          onEdit={() => setEditModal(selectedInteraction)}
         />
       )}
 
@@ -584,6 +594,36 @@ function App() {
         />
       )}
 
+      {screen === 'past-log-type' && (
+        <PastLogTypeScreen
+          onConversation={() => {
+            setScreen('flow-persona')
+          }}
+          onWalkBy={async () => {
+            try {
+              await api('/interactions', {
+                method: 'POST',
+                body: JSON.stringify({
+                  interaction_type: 'walk_by',
+                  timestamp: flowData.customTimestamp
+                })
+              })
+              setConfirmation({ type: 'walk_by' })
+              loadStats()
+              setTimeout(() => {
+                setConfirmation(null)
+                setScreen('home')
+                setFlowData({})
+              }, 1200)
+            } catch (err) {
+              alert('Failed to save: ' + err.message)
+              setScreen('home')
+            }
+          }}
+          onBack={() => setScreen('home')}
+        />
+      )}
+
       {confirmation && <ConfirmationOverlay data={confirmation} flowData={flowData} />}
 
       {notesModal && (
@@ -617,6 +657,35 @@ function App() {
         <EventModal
           onSave={logEvent}
           onClose={() => setEventModal(false)}
+        />
+      )}
+
+      {editModal && (
+        <EditInteractionModal
+          interaction={editModal}
+          onSave={async (updates) => {
+            await updateInteraction(editModal.id, updates)
+            setEditModal(null)
+            // Refresh selected interaction
+            const updated = await api(`/interactions/${editModal.id}`)
+            setSelectedInteraction(updated)
+          }}
+          onClose={() => setEditModal(null)}
+        />
+      )}
+
+      {customTimestampModal && (
+        <CustomTimestampModal
+          data={customTimestampModal}
+          onContinue={(timestamp) => {
+            setFlowData({ customTimestamp: timestamp })
+            setCustomTimestampModal(null)
+            if (customTimestampModal.type === 'choose') {
+              // Show options: conversation or walk-by
+              setScreen('past-log-type')
+            }
+          }}
+          onClose={() => setCustomTimestampModal(null)}
         />
       )}
     </div>
@@ -702,7 +771,7 @@ function SellerSelectScreen({ session, onSelect }) {
 }
 
 // Home Screen
-function HomeScreen({ session, staff, stats, statsPeriod, onCyclePeriod, onConversation, onWalkBy, onViewStats, onLogEvent }) {
+function HomeScreen({ session, staff, stats, statsPeriod, onCyclePeriod, onConversation, onWalkBy, onViewStats, onLogEvent, onPastLog }) {
   const displayName = session?.active_seller?.display_name || staff?.name || 'Staff'
   const periodLabels = { today: 'Today', week: 'Week', all: 'All Time' }
   const currentStats = stats?.[statsPeriod]
@@ -788,6 +857,13 @@ function HomeScreen({ session, staff, stats, statsPeriod, onCyclePeriod, onConve
           <div className="user-avatar">{displayName.charAt(0)}</div>
           <span className="user-name">{displayName}</span>
         </div>
+        <button className="footer-past-log-btn" onClick={onPastLog}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span>Log Past Event</span>
+        </button>
         <div className="footer-location">K Village</div>
       </footer>
 
@@ -1106,7 +1182,7 @@ function InteractionCard({ item, onClick }) {
 }
 
 // Detail Screen (Phase 2)
-function DetailScreen({ interaction, onBack, onAddNote, onDelete }) {
+function DetailScreen({ interaction, onBack, onAddNote, onDelete, onEdit }) {
   const i = interaction
 
   return (
@@ -1114,7 +1190,10 @@ function DetailScreen({ interaction, onBack, onAddNote, onDelete }) {
       <header className="flow-header">
         <button className="btn-back" onClick={onBack}>← Back</button>
         <span className="flow-title">Details</span>
-        <button className="btn-delete" onClick={onDelete}>🗑️</button>
+        <div className="header-actions">
+          <button className="btn-edit-icon" onClick={onEdit}>✏️</button>
+          <button className="btn-delete" onClick={onDelete}>🗑️</button>
+        </div>
       </header>
 
       <div className="detail-content">
@@ -1999,6 +2078,241 @@ function ConfirmationOverlay({ data, flowData }) {
           {allData.sale_type === 'full_year' && <p>Full Year {formatBaht(4990)}</p>}
           {allData.sale_type === 'none' && <p>No sale - {getLabel('objection', allData.objection)?.replace(/_/g, ' ')}</p>}
           <p>{getLabel('lead_type', allData.lead_type)}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Past Log Type Selection Screen
+function PastLogTypeScreen({ onConversation, onWalkBy, onBack }) {
+  return (
+    <div className="screen flow-screen">
+      <header className="flow-header">
+        <button className="btn-back" onClick={onBack}>✕</button>
+        <span className="flow-title">Log Past Event</span>
+      </header>
+      <div className="flow-content">
+        <h2 className="flow-question">What type of interaction?</h2>
+        <div className="flow-stack">
+          <button className="flow-option-wide" onClick={onConversation}>
+            <span className="option-icon">💬</span>
+            <span className="option-label">Conversation</span>
+            <span className="option-sublabel">Full interaction details</span>
+          </button>
+          <button className="flow-option-wide" onClick={onWalkBy}>
+            <span className="option-icon">👋</span>
+            <span className="option-label">Walk-by</span>
+            <span className="option-sublabel">Paused but didn't engage</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Custom Timestamp Modal
+function CustomTimestampModal({ data, onContinue, onClose }) {
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+
+  useEffect(() => {
+    // Set default to current date/time
+    const now = new Date()
+    const dateStr = now.toISOString().split('T')[0]
+    const timeStr = now.toTimeString().slice(0, 5)
+    setDate(dateStr)
+    setTime(timeStr)
+  }, [])
+
+  const handleContinue = () => {
+    if (!date || !time) return
+    const timestamp = new Date(`${date}T${time}:00`).toISOString()
+    onContinue(timestamp)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <h3>⏰ When did this happen?</h3>
+        <div className="datetime-picker">
+          <div className="datetime-field">
+            <label>Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              max={new Date().toISOString().split('T')[0]}
+            />
+          </div>
+          <div className="datetime-field">
+            <label>Time</label>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="modal-hint">Select the date and time of the past interaction</p>
+        <div className="modal-actions">
+          <button className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button className="btn-save" onClick={handleContinue} disabled={!date || !time}>Continue →</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Edit Interaction Modal
+function EditInteractionModal({ interaction, onSave, onClose }) {
+  const [formData, setFormData] = useState({
+    timestamp: '',
+    persona: interaction.persona || '',
+    hook: interaction.hook || '',
+    sale_type: interaction.sale_type || '',
+    quantity: interaction.quantity || 1,
+    unit_price: interaction.unit_price || null,
+    total_amount: interaction.total_amount || null,
+    lead_type: interaction.lead_type || '',
+    objection: interaction.objection || ''
+  })
+
+  useEffect(() => {
+    if (interaction.timestamp) {
+      const dt = new Date(interaction.timestamp)
+      const dateStr = dt.toISOString().split('T')[0]
+      const timeStr = dt.toTimeString().slice(0, 5)
+      setFormData(prev => ({ ...prev, timestamp: `${dateStr}T${timeStr}` }))
+    }
+  }, [interaction.timestamp])
+
+  const handleSave = () => {
+    const updates = {}
+
+    // Only include changed fields
+    if (formData.timestamp && formData.timestamp !== interaction.timestamp) {
+      const [dateStr, timeStr] = formData.timestamp.split('T')
+      updates.timestamp = new Date(`${dateStr}T${timeStr}:00`).toISOString()
+    }
+    if (formData.persona !== interaction.persona) updates.persona = formData.persona || null
+    if (formData.hook !== interaction.hook) updates.hook = formData.hook || null
+    if (formData.sale_type !== interaction.sale_type) updates.sale_type = formData.sale_type || null
+    if (formData.quantity !== interaction.quantity) updates.quantity = formData.quantity
+    if (formData.unit_price !== interaction.unit_price) updates.unit_price = formData.unit_price
+    if (formData.total_amount !== interaction.total_amount) updates.total_amount = formData.total_amount
+    if (formData.lead_type !== interaction.lead_type) updates.lead_type = formData.lead_type || null
+    if (formData.objection !== interaction.objection) updates.objection = formData.objection || null
+
+    if (Object.keys(updates).length === 0) {
+      onClose()
+      return
+    }
+
+    onSave(updates)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content edit-modal" onClick={e => e.stopPropagation()}>
+        <h3>✏️ Edit Interaction</h3>
+
+        <div className="edit-form">
+          <div className="form-field">
+            <label>Timestamp</label>
+            <input
+              type="datetime-local"
+              value={formData.timestamp}
+              onChange={(e) => setFormData({ ...formData, timestamp: e.target.value })}
+            />
+          </div>
+
+          {interaction.engaged && (
+            <>
+              <div className="form-field">
+                <label>Persona</label>
+                <select value={formData.persona} onChange={(e) => setFormData({ ...formData, persona: e.target.value })}>
+                  <option value="">- Select -</option>
+                  <option value="parent">Parent</option>
+                  <option value="gift_buyer">Gift Buyer</option>
+                  <option value="expat">Expat</option>
+                  <option value="future_parent">Future Parent</option>
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>Hook</label>
+                <select value={formData.hook} onChange={(e) => setFormData({ ...formData, hook: e.target.value })}>
+                  <option value="">- Select -</option>
+                  <option value="physical_kits">Physical Kits</option>
+                  <option value="big_garden">Big Garden Screen</option>
+                  <option value="signage">Signage</option>
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>Sale Type</label>
+                <select value={formData.sale_type} onChange={(e) => setFormData({ ...formData, sale_type: e.target.value })}>
+                  <option value="">- Select -</option>
+                  <option value="none">No Sale</option>
+                  <option value="single">Single Box</option>
+                  <option value="bundle_3">3-Box Bundle</option>
+                  <option value="full_year">Full Year</option>
+                </select>
+              </div>
+
+              {formData.sale_type === 'single' && (
+                <>
+                  <div className="form-field">
+                    <label>Quantity</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={formData.quantity}
+                      onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) })}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label>Unit Price</label>
+                    <select value={formData.unit_price || ''} onChange={(e) => setFormData({ ...formData, unit_price: parseInt(e.target.value) })}>
+                      <option value="">- Select -</option>
+                      <option value="990">฿990</option>
+                      <option value="1290">฿1,290</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              <div className="form-field">
+                <label>Lead Type</label>
+                <select value={formData.lead_type} onChange={(e) => setFormData({ ...formData, lead_type: e.target.value })}>
+                  <option value="">- Select -</option>
+                  <option value="none">None</option>
+                  <option value="line">LINE</option>
+                  <option value="email">Email</option>
+                </select>
+              </div>
+
+              {formData.sale_type === 'none' && (
+                <div className="form-field">
+                  <label>Objection</label>
+                  <select value={formData.objection} onChange={(e) => setFormData({ ...formData, objection: e.target.value })}>
+                    <option value="">- Select -</option>
+                    <option value="too_expensive">Too expensive</option>
+                    <option value="has_toys">Has toys</option>
+                    <option value="need_to_think">Need to think</option>
+                    <option value="age_mismatch">Age mismatch</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button className="btn-save" onClick={handleSave}>Save Changes</button>
         </div>
       </div>
     </div>
