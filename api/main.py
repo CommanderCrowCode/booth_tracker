@@ -26,7 +26,7 @@ VALID_INTERACTION_TYPES = {"walk_by", "conversation"}
 VALID_PERSONAS = {"parent", "gift_buyer", "expat", "future_parent"}
 VALID_HOOKS = {"physical_kits", "big_garden", "signage"}
 VALID_SALE_TYPES = {"none", "single", "bundle_3", "full_year"}
-VALID_LEAD_TYPES = {"line", "email"}
+VALID_LEAD_TYPES = {"line", "email", "instagram"}
 VALID_OBJECTIONS = {
     "too_expensive", "not_interested", "no_time", "already_have",
     "need_to_think", "language_barrier", "other"
@@ -387,6 +387,10 @@ async def get_stats(period: str = "today"):
             "SELECT COUNT(*) FROM interactions WHERE timestamp >= $1 AND lead_type = 'email' AND deleted_at IS NULL",
             start_date
         )
+        instagram_leads = await conn.fetchval(
+            "SELECT COUNT(*) FROM interactions WHERE timestamp >= $1 AND lead_type = 'instagram' AND deleted_at IS NULL",
+            start_date
+        )
 
     return {
         "period": period,
@@ -409,7 +413,8 @@ async def get_stats(period: str = "today"):
         "objections": {row["objection"]: row["count"] for row in objections},
         "leads": {
             "line": line_leads or 0,
-            "email": email_leads or 0
+            "email": email_leads or 0,
+            "instagram": instagram_leads or 0
         }
     }
 
