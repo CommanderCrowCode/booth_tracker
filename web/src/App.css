@@ -448,6 +448,32 @@ button {
   letter-spacing: 1px;
 }
 
+.footer-past-log-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 20px;
+  background: var(--cream-dark);
+  color: var(--warm-gray);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.footer-past-log-btn:hover {
+  background: var(--terracotta-light);
+  color: white;
+}
+
+.footer-past-log-btn:active {
+  transform: scale(0.96);
+}
+
+.footer-past-log-btn svg {
+  flex-shrink: 0;
+}
+
 /* ============================================
    STATS SCREEN
    ============================================ */
