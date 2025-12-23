@@ -404,8 +404,8 @@ CREATE TABLE interactions (
     total_amount INTEGER,
     
     -- Lead capture
-    lead_type VARCHAR(20) 
-        CHECK (lead_type IN ('line', 'email', 'none')),
+    lead_type VARCHAR(20)
+        CHECK (lead_type IN ('line', 'email', 'instagram', 'none')),
     
     -- Objection (only if sale_type = 'none')
     objection VARCHAR(50)
